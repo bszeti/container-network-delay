@@ -1,16 +1,55 @@
-Simulate network delays using containers
-========================================
+Simulate network delays with local containers
+=============================================
 
 Some real world use cases can be challenging to test as a developer. With limited resources and permissions sometimes we can't reproduce issues that we face in a QA or production environments, which makes debugging and fixing them cumbersome. In this post we'll take a look how to use containers to simulate the impact of network latency on a distributed database cluster using only a single laptop.
 
 Generally, it's a good idea to utilize containers on a local environment - inner loop - to test how your application works in a production like environment in certain situations (e.g. limited resource availability, network issues...).
 
-If you have a Linux host, you can use `podman` or `docker` directly to spin up containers, on Mac or Windows you'll need [Podman Desktop](https://podman-desktop.io/) or [Docker Desktop](https://www.docker.com/products/docker-desktop/) that creates a Linux VM under to hood run containers.
-
-See https://srtlab.github.io/srt-cookbook/how-to-articles/using-netem-to-emulate-networks.html
+If you have a Linux host, you can use `podman` or `docker` directly to spin up containers, on Mac or Windows you'll need [Podman Desktop](https://podman-desktop.io/) or [Docker Desktop](https://www.docker.com/products/docker-desktop/) that creates a Linux VM under the hood to run containers. See [Troubleshooting](#troubleshooting) below how to prepare the host.
 
 
-## Troubleshooting
+## Add delay to an interface
+
+Use Linux traffic control `tc` and _NetEm_ to add delay or simulate other network issues on an interface. The `tc` operations require the `NET_ADMIN` capability to be added to the container when it's created. See details at https://srtlab.github.io/srt-cookbook/how-to-articles/using-netem-to-emulate-networks.html
+
+### Install `tc`
+Install the `tc` tool within the container. We can build a whole new image with a `Dockerfile` or simply add the installation steps to the container's entrypoint if its user is `root` or it can `sudo`.
+* On a Red Hat (or Fedora) based image: `dnf update -y && dnf install -y iproute-tc`
+* On a Debian based image: `apt update && apt-get install -y iproute2`
+
+### Run `tc`
+A container running locally usually have two interfaces: `lo` and `eth0`. Add delay to the `lo` interface to have an impact on a port published to the host:
+* Run `tc qdisc add dev lo root netem delay 50ms` - as root - inside the container
+
+Use interface `eth0` to add delay between containers attached to the same internal network:
+* Run `tc qdisc add dev eth0 root netem delay 50ms` - as root - inside the container
+
+Also:
+* Check status: `tc qdisc show`
+* Remove delay: `tc qdisc del dev lo root`
+
+### Try with PostgreSQL
+
+Start the container with published database port `5432`:
+
+`podman run -d --name mypostgres --cap-add NET_ADMIN -p 5432:5432 -e POSTGRES_PASSWORD=secret postgres:17.4`
+
+Check that a `SELECT 1` is quick (<1ms) by default. We enable `\timing`, so `psql` logs the execution time:
+
+* If you have `psql` installed on your laptop:<br>
+`PGPASSWORD=secret psql -h localhost -p 5432 -U postgres  postgres -c "\timing" -c "SELECT 1"`
+
+* Or use `psql` within the container:<br>
+`podman exec -it mypostgres sh -c 'psql -h 127.0.0.1 -p 5432 -U postgres postgres -c "\timing" -c "SELECT 1"'`
+
+Let's install `tc` and add delay to the `lo` interface:
+
+`podman exec -it mypostgres sh -c 'apt update && apt-get install -y iproute2 && tc qdisc add dev lo root netem delay 50ms'`
+
+Run `SELECT 1` again, it should report ~100ms execution time because of the added network delay. 
+
+
+## <a name="troubleshooting">Troubleshooting</a>
 
 The `tc qdisc` commands above require the `sch_netem` [Network Emulator](https://man7.org/linux/man-pages/man8/tc-netem.8.html) kernel module to add delay to network interfaces. It's a common problem to run into `Specified qdisc not found` error first if this kernel module is not available on your host. As the kernel is shared between containers, you need to enable the kernel module on your Linux host or within the Linux VM on Mac/Windows as explained below.
 
@@ -20,7 +59,13 @@ On Windows you need to use Podman with _Hyper-V_ backend instead of _Windows Sub
 
 The Linux VM [machine](https://github.com/containers/podman-machine-os/tree/main) used by Podman Desktop is based on _Fedora CoreOS_. See available [images](https://quay.io/repository/podman/machine-os?tab=tags) and [repo](https://github.com/containers/podman-machine-os/tree/main) for details. Currently image `v5.3` is used by default, but you can enforce a specific version as `podman machine init --image docker://quay.io/podman/machine-os:5.5`.
 
-To enable the `sch_netem` kernel module, get a shell inside the VM with `podman machine ssh`. The `sudo modprobe sch_netem` command will probably drop an error indicating that the module is missing. Install it via `sudo rpm-ostree install kernel-modules-extra`, exit and restart the VM with `podman machine stop; podman machine start`. The `sch_netem` kernel module should be available now.
+To enable the `sch_netem` kernel module, get a shell inside the VM with `podman machine ssh`. 
+* The `sudo modprobe sch_netem` command will probably drop an error indicating that the module is missing. 
+* Install it via `sudo rpm-ostree install kernel-modules-extra`.
+* Remove the default config blocking auto-load for this kernel module (this is a dangerous module if you think about it): `sudo rm /etc/modprobe.d/sch_netem-blacklist.conf`
+* Enable loading kernel module on startup: `sudo sh -c 'echo sch_netem >/etc/modules-load.d/sch_netem.conf'`
+
+Exit and restart the VM with `podman machine stop; podman machine start`. The `sch_netem` kernel module should be running now, check `lsmod | grep sch_netem`.
 
 ### Docker Desktop
 
