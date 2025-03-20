@@ -61,7 +61,14 @@ Expect to see the configured ~50ms ping time.
 
 ### Try a whole YugabyteDB cluster
 
-[YugabyteDB](https://www.yugabyte.com/) is a distributed PostgreSQL-compatible database.
+[YugabyteDB](https://www.yugabyte.com/) is a distributed PostgreSQL-compatible database. The [yugabytedb-cluster.sh](yugabytedb-cluster.sh) script creates a whole db cluster in containers simulating a five node database distributed in two different regions/datacenters with network latency in between:
+* Bash script uses `podman` commands, run `alias podman=docker` to use Docker 
+* Region-A has `db-node1-2`. Region-B has `db-node3-5` with network latency.
+* Port of `db-node1` are published to host, to connect with `psql` or a test app
+* `SELECT` is quick as there is no latency on `db-node1`
+* `INSERT` is slow because we enforced replication to the nodes "in the other region"
+
+_Thanks to [Gus Reyna](https://github.com/gr-yb) for all the contribution._
 
 #### Original use case
 
