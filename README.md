@@ -5,19 +5,19 @@ Some real world use cases can be challenging to test as a developer. With limite
 
 Generally, it's a good idea to utilize containers on a local environment - inner loop - to test how your application works in a production like environment in certain situations (e.g. limited resource availability, network issues...).
 
-If you have a Linux host, you can use `podman` or `docker` directly to spin up containers, on Mac or Windows you'll need [Podman Desktop](https://podman-desktop.io/) or [Docker Desktop](https://www.docker.com/products/docker-desktop/) that creates a Linux VM under the hood to run containers. See [Troubleshooting](#troubleshooting) below how to prepare the host.
+If you have a Linux host, you can use `podman` or `docker` directly to spin up containers, on Mac or Windows you'll need [Podman Desktop](https://podman-desktop.io/) or [Docker Desktop](https://www.docker.com/products/docker-desktop/) that creates a Linux VM under the hood to run containers. See [Troubleshooting](#troubleshooting) below how to prepare the host. Here we'll use `podman` commands, but they work interchangeably with `docker`.
 
 
 ## Add delay to an interface
 
-Use Linux traffic control `tc` and _NetEm_ to add delay or simulate other network issues on an interface. The `tc` operations require the `NET_ADMIN` capability to be added to the container when it's created. See details at https://srtlab.github.io/srt-cookbook/how-to-articles/using-netem-to-emulate-networks.html
+Use Linux traffic control `tc` and _NetEm_ to add delay or simulate other network issues on an interface. The `tc` operations require the `NET_ADMIN` capability to be added to the container when it's created (otherwise getting `RTNETLINK answers: Operation not permitted`). See details at https://srtlab.github.io/srt-cookbook/how-to-articles/using-netem-to-emulate-networks.html
 
 ### Install `tc`
 Install the `tc` tool within the container. We can build a whole new image with a `Dockerfile` or simply add the installation steps to the container's entrypoint if its user is `root` or it can `sudo`.
-* On a Red Hat (or Fedora) based image: `dnf update -y && dnf install -y iproute-tc`
+* On a Red Hat or Fedora based image (excluding UBI): `dnf update -y && dnf install -y iproute-tc`
 * On a Debian based image: `apt update && apt-get install -y iproute2`
 
-### Run `tc`
+### Use `tc`
 A container running locally usually have two interfaces: `lo` and `eth0`. Add delay to the `lo` interface to have an impact on a port published to the host:
 * Run `tc qdisc add dev lo root netem delay 50ms` - as root - inside the container
 
@@ -47,6 +47,29 @@ Let's install `tc` and add delay to the `lo` interface:
 `podman exec -it mypostgres sh -c 'apt update && apt-get install -y iproute2 && tc qdisc add dev lo root netem delay 50ms'`
 
 Run `SELECT 1` again, it should report ~100ms execution time because of the added network delay. 
+
+### Try two containers on the same network
+
+Run a container with delay on `eth0` and ping it from another container on the same internal network:
+
+```
+$ podman run -d --name fedora --net mynetwork --cap-add NET_ADMIN fedora:42 sh -c 'dnf install -y iproute-tc && tc qdisc add dev eth0 root netem delay 50ms && sleep infinity'
+
+$ podman run --rm -it --name ping --net mynetwork fedora:42 sh -c 'dnf install iputils -y && ping fedora'
+```
+Expect to see the configured ~50ms ping time.
+
+### Try a whole YugabyteDB cluster
+
+[YugabyteDB](https://www.yugabyte.com/) is a distributed PostgreSQL-compatible database.
+
+#### Original use case
+
+Here is a quick note about a real world problem we managed to replicate and resolve using local containers as explained above. We experienced significant performance degradation with a Spring Boot application caused by longer than expected execution time for inserting hundreds of rows in a database.
+
+Creating a YugabyteDB cluster with network delays matching the production environment in containers made it possible to do an in depth analysis and debugging on our local laptops. The tools available in development _inner loop_ accelerates investigation and results in a quick feedback loop for developers trying different approaches to fix the root cause of the problem.
+
+In this special case we found that enabling [batch inserts](https://www.baeldung.com/spring-data-jpa-batch-inserts) was not enough to achieve performance improvement due to the distributed nature of the database, but we had to add `reWriteBatchedInserts=true` in our [`postgresql` JDBC connection string](https://jdbc.postgresql.org/documentation/use/#connection-parameters) to merge `INSERT` statements.
 
 
 ## <a name="troubleshooting">Troubleshooting</a>
