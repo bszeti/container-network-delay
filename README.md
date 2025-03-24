@@ -5,7 +5,7 @@ Some real world use cases can be challenging to test as a developer. With limite
 
 Generally, it's a good idea to utilize containers on a local environment - inner loop - to test how your application works in a production like environment in certain situations (e.g. limited resource availability, network issues...).
 
-If you have a Linux host, you can use `podman` or `docker` directly to spin up containers, on Mac or Windows you'll need [Podman Desktop](https://podman-desktop.io/) or [Docker Desktop](https://www.docker.com/products/docker-desktop/) that creates a Linux VM under the hood to run containers. See [Troubleshooting](#troubleshooting) below how to prepare the host. Here we'll use `podman` commands, but they work interchangeably with `docker`.
+If you have a Linux host, you can use `podman` or `docker` directly to spin up containers. On Mac or Windows you'll need [Podman Desktop](https://podman-desktop.io/) or [Docker Desktop](https://www.docker.com/products/docker-desktop/) that creates a Linux VM under the hood to run containers. See [Troubleshooting](#troubleshooting) below how to prepare the host. Here we'll use `podman` commands, but they work interchangeably with `docker`.
 
 
 ## Add delay to an interface
@@ -37,7 +37,7 @@ Start the container with published database port `5432`:
 Check that a `SELECT 1` is quick (<1ms) by default. We enable `\timing`, so `psql` logs the execution time:
 
 * If you have `psql` installed on your laptop:<br>
-`PGPASSWORD=secret psql -h localhost -p 5432 -U postgres  postgres -c "\timing" -c "SELECT 1"`
+`PGPASSWORD=secret psql -h localhost -p 5432 -U postgres postgres -c "\timing" -c "SELECT 1"`
 
 * Or use `psql` within the container:<br>
 `podman exec -it mypostgres sh -c 'psql -h 127.0.0.1 -p 5432 -U postgres postgres -c "\timing" -c "SELECT 1"'`
@@ -78,7 +78,6 @@ Creating a YugabyteDB cluster with network delays matching the production enviro
 
 In this special case we found that enabling [batch inserts](https://www.baeldung.com/spring-data-jpa-batch-inserts) was not enough to achieve performance improvement due to the distributed nature of the database, but we had to add `reWriteBatchedInserts=true` in our [`postgresql` JDBC connection string](https://jdbc.postgresql.org/documentation/use/#connection-parameters) to merge `INSERT` statements.
 
-
 ## <a name="troubleshooting">Troubleshooting</a>
 
 The `tc qdisc` commands above require the `sch_netem` [Network Emulator](https://man7.org/linux/man-pages/man8/tc-netem.8.html) kernel module to add delay to network interfaces. It's a common problem to run into `Specified qdisc not found` error first if this kernel module is not available on your host. As the kernel is shared between containers, you need to enable the kernel module on your Linux host or within the Linux VM on Mac/Windows as explained below.
@@ -102,3 +101,44 @@ Exit and restart the VM with `podman machine stop; podman machine start`. The `s
 On Windows you need to use Docker Desktop with _Hyper-V_ backend instead of _Windows Subsystem for Linux - WSL2_. Make sure that [Hyper-V is enabled on your machine](https://learn.microsoft.com/en-us/windows-server/virtualization/hyper-v/get-started/install-hyper-v?pivots=windows) and turn off [Use WSL 2 based engine](https://docs.docker.com/desktop/features/wsl/) in `Settings/General`. You need local admin permissions.
 
 The Linux VM machine created by Docker Desktop - on Mac or Windows - should have the `sch_netem` kernel module by default, so no additional steps are needed to enable it. To verify, [get a shell in the VM](https://gist.github.com/BretFisher/5e1a0c7bcca4c735e716abf62afad389). The easiest seems to be to run `docker run -it --rm --privileged --pid=host justincormack/nsenter1`. Try `modprobe sch_netem`, no error message indicates that the module is available.
+
+## Using Pods instead of a single container
+
+If we can't install the `tc` tool directly in the main container image (e.g. using Red Hat Universal Base Image), we can create a Pod and run the `tc` command in another container. Containers in the same Pod share the same network interface, so the network latency set in one container has an impact on the whole Pod. 
+
+> **Note:**
+> These examples are for Podman only
+
+For example, add latency to a published port:
+
+```
+# Create a Pod with published port
+podman pod create -p 5432:5432 mypod
+
+# Run a container with "tc" tool in the Pod
+podman run --pod mypod -it --rm --cap-add NET_ADMIN fedora:42 sh -c 'dnf install -y iproute-tc && tc qdisc add dev lo root netem delay 50ms'
+
+# Run the main container in the Pod
+podman run --pod mypod -d -e POSTGRES_PASSWORD=secret postgres:17.4
+
+# Check longer query time
+PGPASSWORD=secret psql -h localhost -p 5432 -U postgres postgres -c "\timing" -c "SELECT 1"
+```
+
+Similarly, increase ping between containers:
+
+```
+# Create a Pod
+podman pod create --network mynetwork mypod
+
+# Run a container with "tc" tool in the Pod
+podman run --pod mypod -it --rm --cap-add NET_ADMIN fedora:42 sh -c 'dnf install -y iproute-tc && tc qdisc add dev eth0 root netem delay 50ms'
+
+# Run the main container in the Pod
+podman run --pod mypod -d redhat/ubi9 sh -c 'sleep infinity'
+
+# Hostname to ping is the Pod's name in this case
+podman run --rm -it --name ping --net mynetwork fedora:42 sh -c 'dnf install iputils -y && ping mypod'
+```
+
+
