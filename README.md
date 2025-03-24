@@ -24,6 +24,9 @@ A container running locally usually have two interfaces: `lo` and `eth0`. Add de
 Use interface `eth0` to add delay between containers attached to the same internal network:
 * Run `tc qdisc add dev eth0 root netem delay 50ms` - as root - inside the container
 
+> **Note:**
+> With Docker Desktop use `eth0` in both case.
+
 Also:
 * Check status: `tc qdisc show`
 * Remove delay: `tc qdisc del dev lo root`
@@ -104,10 +107,7 @@ The Linux VM machine created by Docker Desktop - on Mac or Windows - should have
 
 ## Using Pods instead of a single container
 
-If we can't install the `tc` tool directly in the main container image (e.g. using Red Hat Universal Base Image), we can create a Pod and run the `tc` command in another container. Containers in the same Pod share the same network interface, so the network latency set in one container has an impact on the whole Pod. 
-
-> **Note:**
-> These examples are for Podman only
+If we can't install the `tc` tool directly in the main container image (e.g. using Red Hat Universal Base Image), we can run the `tc` command in another container attached to the same container network namespace. Podman supports the concept of _Pods_ for such purposes, similarly to Kubernetes. Containers in the same Pod share the same network interface, so the network latency set in one container has an impact on the whole Pod. 
 
 For example, add latency to a published port:
 
@@ -141,4 +141,25 @@ podman run --pod mypod -d redhat/ubi9 sh -c 'sleep infinity'
 podman run --rm -it --name ping --net mynetwork fedora:42 sh -c 'dnf install iputils -y && ping mypod'
 ```
 
+Docker doesn't support Pods the same way, but we can achieve a similar result with `--network container:[name]`:
 
+```
+# Run main container
+docker run -d --name mypostgres -p 5432:5432 -e POSTGRES_PASSWORD=secret postgres:17.4
+
+# Run another container attached to first container's network namespace
+docker run -it --rm --network container:mypostgres --cap-add NET_ADMIN fedora:42 sh -c 'dnf install -y iproute-tc && tc qdisc add dev eth0 root netem delay 50ms'
+```
+
+Ping example with Docker:
+
+```
+# Run main container
+docker run --network mynetwork --name ubi -d redhat/ubi9 sh -c 'sleep infinity'
+
+# Run another container attached to the first container's network namespace
+docker run --network container:ubi -it --rm --cap-add NET_ADMIN fedora:42 sh -c 'dnf install -y iproute-tc && tc qdisc add dev eth0 root netem delay 50ms'
+
+# Test ping time on the same local network
+docker run --network mynetwork --rm -it fedora:42 sh -c 'dnf install iputils -y && ping ubi'
+```
