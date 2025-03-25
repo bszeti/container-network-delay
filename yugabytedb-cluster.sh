@@ -25,8 +25,6 @@ while true; do
   podman exec -it db-node1 /home/yugabyte/bin/yb-admin -master_addresses db-node1 list_all_tablet_servers | grep ALIVE | [ $(wc -l) == 1 ] && break
   sleep 2
 done
-# while true; do echo "Waiting for first node to come up..."; sleep 2; podman exec -it db-node1 /home/yugabyte/bin/yb-admin -master_addresses db-node1 list_all_tablet_servers | grep ALIVE | [ $(wc -l) == 1 ] && break; done
-
 
 ## Node2 - region-a.az-2
 podman run -it -d --name db-node2 --net db-network -v data-db-node2:/home/yugabyte/data \
