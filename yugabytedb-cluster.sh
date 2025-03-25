@@ -3,12 +3,15 @@
 ## Uncomment to use "docker" instead of "podman"
 # alias podman=docker
 
-## Delete existing cluster first if script was run before
-podman rm -f db-node5  db-node4 db-node3 db-node2 db-node1
-podman volume rm data-db-node5 data-db-node4 data-db-node3 data-db-node2 data-db-node1
+## Delete existing nodes and volumes first if script was run before
+echo "Cleanup..."
+podman rm -f db-node{5..1}
+for volume in data-db-node{1..5}; do
+  podman volume exists $volume && podman volume rm $volume
+done
 
-## Crate an internal network
-podman network create db-network
+## Crate an internal network if it doesn't exist
+podman network exists db-network || podman network create db-network
 
 ## Node1 - region-a.az-1
 ## First node in the primary region, other nodes can join. UI and database port is published
@@ -16,8 +19,14 @@ podman run -it -d --name db-node1 --net db-network -v data-db-node1:/home/yugaby
   yugabytedb/yugabyte:2024.2.2.1-b6 \
   bin/yugabyted start --cloud_location=dc.region-a.az-1 --tserver_flags="ysql_max_connections=100" --base_dir=/home/yugabyte/data --background=false
 
-## Node1 is required to be up so others can join
-sleep 10
+## Wait for first node to come up
+while true; do 
+  echo "Waiting for first node to come up..."
+  podman exec -it db-node1 /home/yugabyte/bin/yb-admin -master_addresses db-node1 list_all_tablet_servers | grep ALIVE | [ $(wc -l) == 1 ] && break
+  sleep 2
+done
+# while true; do echo "Waiting for first node to come up..."; sleep 2; podman exec -it db-node1 /home/yugabyte/bin/yb-admin -master_addresses db-node1 list_all_tablet_servers | grep ALIVE | [ $(wc -l) == 1 ] && break; done
+
 
 ## Node2 - region-a.az-2
 podman run -it -d --name db-node2 --net db-network -v data-db-node2:/home/yugabyte/data \
@@ -66,14 +75,16 @@ podman exec -it db-node1 ysqlsh -h db-node1 -U yugabyte -d yugabyte -c "alter ro
 
 ## SELECT is quick, there is no network delay for db-node1
 echo "\nExecuting SELECT..."
-psql "host=127.0.0.1 port=5433 user=yugabyte" -c "\timing" -c "SELECT 1"
+# psql "host=127.0.0.1 port=5433 user=yugabyte" -c "\timing" -c "SELECT 1"
+podman exec -it db-node1 ysqlsh -h db-node1 -U yugabyte -d yugabyte -c "\timing" -c "SELECT 1"
 
 ## CREATE TABLE mytable (id bigint NOT NULL, CONSTRAINT "mytable-pkey" PRIMARY KEY (id));
-psql "host=127.0.0.1 port=5433 user=yugabyte" -c 'CREATE TABLE mytable (id bigint NOT NULL, CONSTRAINT "mytable-pkey" PRIMARY KEY (id))'
+# psql "host=127.0.0.1 port=5433 user=yugabyte" -c 'CREATE TABLE mytable (id bigint NOT NULL, CONSTRAINT "mytable-pkey" PRIMARY KEY (id))'
+podman exec -it db-node1 ysqlsh -h db-node1 -U yugabyte -d yugabyte -c 'CREATE TABLE mytable (id bigint NOT NULL, CONSTRAINT "mytable-pkey" PRIMARY KEY (id))'
+
 ## INSERT is slow (>25ms) because of the network delay between cluster nodes 
-## \timing
-## INSERT INTO mytable (id) VALUES (1);
 echo "\nExecuting INSERT..."
-psql "host=127.0.0.1 port=5433 user=yugabyte" -c "\timing" -c "INSERT INTO mytable (id) VALUES (1)"
+# psql "host=127.0.0.1 port=5433 user=yugabyte" -c "\timing" -c "INSERT INTO mytable (id) VALUES (1)"
+podman exec -it db-node1 ysqlsh -h db-node1 -U yugabyte -d yugabyte -c "\timing" -c "INSERT INTO mytable (id) VALUES (1)"
 
 
