@@ -24,7 +24,7 @@ A container running locally usually have two interfaces: `lo` and `eth0`. Add de
 Use interface `eth0` to add delay between containers attached to the same internal network:
 * Run `tc qdisc add dev eth0 root netem delay 50ms` - as root - inside the container
 
-> **Note:**
+> [!NOTE]
 > With Docker Desktop use `eth0` in both case.
 
 Also:
